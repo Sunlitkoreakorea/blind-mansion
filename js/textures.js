@@ -29,12 +29,14 @@ export const PALETTE = {
 export function wallTex(theme) {
   return cached('wall-' + theme, () => {
     const P = PALETTE[theme];
-    const [c, g] = canvas(256, 512);
-    const railY = Math.round(512 * 0.66);
+    // 벽 높이 8.4m에 맞춘 세로로 긴 벽지 (징두리 1.56m는 그대로)
+    const HT = 1024;
+    const [c, g] = canvas(256, HT);
+    const railY = HT - 190;
     g.fillStyle = P.paper; g.fillRect(0, 0, 256, railY);
     // 무늬
     if (theme === 'brass') {
-      for (let row = 0; row < 6; row++) {
+      for (let row = 0; row < 13; row++) {
         for (let col = 0; col < 3; col++) {
           const x = col * 128 + (row % 2 ? 64 : 0), y = row * 62 + 24;
           g.fillStyle = P.motif;
@@ -58,7 +60,7 @@ export function wallTex(theme) {
         g.beginPath(); g.moveTo(x, y); g.lineTo(x + 22, y + 40); g.lineTo(x - 22, y + 40); g.fill();
       }
       g.strokeStyle = P.motif; g.lineWidth = 2;
-      for (let i = 0; i < 5; i++) { g.beginPath(); g.arc(128, 120 + i * 30, 30 + i * 18, 0, Math.PI * 2); g.stroke(); }
+      for (let k = 0; k < 2; k++) for (let i = 0; i < 5; i++) { g.beginPath(); g.arc(128, 160 + k * 400 + i * 30, 30 + i * 18, 0, Math.PI * 2); g.stroke(); }
     }
     // 위쪽 몰딩
     g.fillStyle = P.motif2; g.fillRect(0, 0, 256, 14);
@@ -67,22 +69,37 @@ export function wallTex(theme) {
     g.fillStyle = P.rail; g.fillRect(0, railY - 4, 256, 8);
     g.fillStyle = 'rgba(0,0,0,0.4)'; g.fillRect(0, railY + 4, 256, 3);
     // 징두리 판
-    g.fillStyle = P.wood; g.fillRect(0, railY + 7, 256, 512 - railY - 7);
+    g.fillStyle = P.wood; g.fillRect(0, railY + 7, 256, HT - railY - 7);
     for (let i = 0; i < 2; i++) {
       const x = 14 + i * 128;
       g.fillStyle = P.woodHi; g.fillRect(x, railY + 26, 100, 112);
       g.fillStyle = P.wood; g.fillRect(x + 6, railY + 32, 88, 100);
     }
-    g.fillStyle = '#0a0705'; g.fillRect(0, 490, 256, 22);
+    g.fillStyle = '#0a0705'; g.fillRect(0, HT - 22, 256, 22);
     // 얼룩
     const r = mulberry32(theme.length * 77);
-    for (let i = 0; i < 40; i++) {
+    for (let i = 0; i < 70; i++) {
       g.fillStyle = `rgba(0,0,0,${0.03 + r() * 0.06})`;
-      g.beginPath(); g.arc(r() * 256, r() * 512, 6 + r() * 30, 0, Math.PI * 2); g.fill();
+      g.beginPath(); g.arc(r() * 256, r() * HT, 6 + r() * 30, 0, Math.PI * 2); g.fill();
     }
     const t = toTex(c);
     t.wrapS = THREE.RepeatWrapping;
     return t;
+  });
+}
+
+// 접힌 관람 지도 (라운지 탁자 위)
+export function mapPaperTex() {
+  return cached('mapPaper', () => {
+    const [c, g] = canvas(256, 190);
+    g.fillStyle = '#e2d2ad'; g.fillRect(0, 0, 256, 190);
+    g.strokeStyle = '#4a3118'; g.lineWidth = 3;
+    g.strokeRect(14, 14, 228, 162);
+    g.lineWidth = 2;
+    for (const [x, y, w, h] of [[30, 30, 60, 40], [100, 30, 50, 70], [160, 40, 66, 30], [30, 90, 40, 60], [80, 110, 90, 40], [180, 90, 46, 60]]) g.strokeRect(x, y, w, h);
+    g.fillStyle = 'rgba(80,50,20,0.25)'; g.fillRect(126, 0, 4, 190); g.fillRect(0, 93, 256, 4);
+    g.fillStyle = '#4a3118'; g.font = '700 18px serif'; g.textAlign = 'center'; g.fillText('관람 지도', 128, 186);
+    return toTex(c);
   });
 }
 

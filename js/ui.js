@@ -23,10 +23,12 @@ export class UI {
       <div class="manual">
         <div class="seal">Qterw-B-666</div>
         <h1>눈먼 자들의 저택</h1>
-        ${MANUAL.map((p) => `<p>${esc(p)}</p>`).join('')}
+        ${MANUAL.intro.map((p) => `<p>${esc(p)}</p>`).join('')}
+        <ol class="rules">${MANUAL.rules.map((p) => `<li>${esc(p)}</li>`).join('')}</ol>
+        ${MANUAL.outro.map((p) => `<p>${esc(p)}</p>`).join('')}
         ${unlocked ? `<div class="modes"><button data-m="story" class="on">원작</button><button data-m="random">무작위</button></div>` : ''}
         <button class="read">다 읽었다</button>
-        <div class="keys">WASD 이동 / Shift 달리기 / E 살펴보기 / F 양초 / Q 렌즈 / R 수리</div>
+        <div class="keys">WASD 이동 / Shift 달리기 / E 살펴보기 / F 양초 / Q 렌즈 / R 수리 / M 지도</div>
         ${matchMedia('(hover: none)').matches ? '<div class="keys">키보드와 마우스가 있는 PC에서 해 주세요</div>' : ''}
       </div>
       <div class="fan">팬이 만든 비공식 게임 / 원작 「괴담에 떨어져도 출근을 해야 하는구나」</div>`;
@@ -50,6 +52,7 @@ export class UI {
     const inv = [];
     if (s.tools) inv.push(`<span>정비 공구 ${s.tools}</span>`);
     if (s.kits) inv.push(`<span>양초 키트 ${s.kits}</span>`);
+    if (s.map) inv.push(`<span>관람 지도 (M)</span>`);
     $('#inv').innerHTML = inv.join('');
     $('#candle').innerHTML = s.candles.map((c) => `
       <div class="cd ${c.lit ? 'lit' : ''} ${c.ready ? '' : 'soft'}">
@@ -118,7 +121,7 @@ export class UI {
     const p = $('#pause');
     p.hidden = !show;
     if (show) {
-      p.innerHTML = `<div class="box"><div class="pt">잠시 멈춤</div><button class="go">계속 관람</button><div class="keys">WASD 이동 / Shift 달리기 / E 살펴보기 / F 양초 / Q 렌즈 / R 수리 / 오른쪽 클릭 줌</div></div>`;
+      p.innerHTML = `<div class="box"><div class="pt">잠시 멈춤</div><button class="go">계속 관람</button><div class="keys">WASD 이동 / Shift 달리기 / E 살펴보기 / F 양초 / Q 렌즈 / R 수리 / M 지도 / 오른쪽 클릭 줌</div></div>`;
       p.querySelector('.go').onclick = onResume;
     }
   }

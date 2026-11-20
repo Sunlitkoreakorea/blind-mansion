@@ -14,7 +14,7 @@ let MAT = null;
 function mats() {
   if (MAT) return MAT;
   MAT = {
-    metal: new THREE.MeshPhongMaterial({ vertexColors: true, shininess: 70, specular: 0x6a5a40 }),
+    metal: new THREE.MeshPhongMaterial({ vertexColors: true, shininess: 40, specular: 0x403626 }),
     glass: new THREE.MeshPhongMaterial({ color: 0xffe2b0, transparent: true, opacity: 0.22, shininess: 140, specular: 0xffffff, depthWrite: false }),
     fluid: new THREE.MeshPhongMaterial({ color: 0x6a0000, emissive: 0x2a0000, shininess: 90, specular: 0x804040 }),
     core: new THREE.MeshBasicMaterial({ color: 0xffa040 }),
@@ -26,7 +26,7 @@ function mats() {
 }
 
 /* ── 모양 만드는 도구 ── */
-const COL = { iron: 0x2a251e, iron2: 0x3d352b, plate: 0x1c1915, brass: 0xa07a36, brassDk: 0x6e5226, steel: 0x9a9890, steelDk: 0x55524c, rubber: 0x151311, stain: 0x5a0705, stain2: 0x2e0302 };
+const COL = { iron: 0x40382e, iron2: 0x5a4e40, plate: 0x2c2721, brass: 0xb88e42, brassDk: 0x86652f, steel: 0x9c9a92, steelDk: 0x6a665e, rubber: 0x221e1a, stain: 0x6a0806, stain2: 0x3a0403 };
 const _c = new THREE.Color();
 // 색을 꼭짓점에 칠함 (재질 하나로 여러 금속을 그리기 위해)
 function paint(geo, col) {
@@ -317,15 +317,17 @@ export function buildRobotModel(parent, scale = 1) {
   const head = new THREE.Group();
   head.position.set(0, 0.48, 0.12);
   body.add(head);
-  head.add(mesh(Q.head, M.metal));
-  head.add(mesh(Q.glass, M.glass));
+  const skull = new THREE.Group(); // 머리를 홱 꺾는 건 겉모습만 (등불 빛은 흔들리지 않게)
+  head.add(skull);
+  skull.add(mesh(Q.head, M.metal));
+  skull.add(mesh(Q.glass, M.glass));
   const core = mesh(Q.cores, M.lamp);
-  head.add(core);
+  skull.add(core);
   const halo = new THREE.Points(Q.halo, new THREE.PointsMaterial({ map: haloTex(), color: 0xffb040, size: 0.2, transparent: true, opacity: 0.75, blending: THREE.AdditiveBlending, depthWrite: false }));
-  head.add(halo);
+  skull.add(halo);
   const fangL = new THREE.Group(); fangL.position.set(0.065, -0.11, 0.162); fangL.add(mesh(Q.fangL, M.metal));
   const fangR = new THREE.Group(); fangR.position.set(-0.065, -0.11, 0.162); fangR.add(mesh(Q.fangR, M.metal));
-  head.add(fangL, fangR);
+  skull.add(fangL, fangR);
   const lampTarget = new THREE.Object3D();
   lampTarget.position.set(0, -1.2, 3);
   head.add(lampTarget);
@@ -348,7 +350,7 @@ export function buildRobotModel(parent, scale = 1) {
   }
   root.scale.setScalar(scale);
   parent.add(root);
-  return { root, body, head, core, halo, lamps: [core], legs, lampTarget, xr, scale, gears: [gA, gB, gC], glow, key, fangL, fangR, syr, sawArm, disc };
+  return { root, body, head, skull, core, halo, lamps: [core], legs, lampTarget, xr, scale, gears: [gA, gB, gC], glow, key, fangL, fangR, syr, sawArm, disc };
 }
 
 const _h = new THREE.Vector3(), _f = new THREE.Vector3(), _d = new THREE.Vector3(), _p = new THREE.Vector3(), _k = new THREE.Vector3(), _q = new THREE.Quaternion(), _o = new THREE.Vector3();
@@ -450,7 +452,7 @@ export class Robot {
   canSee(px, pz) {
     const dx = px - this.pos.x, dz = pz - this.pos.z;
     const d = Math.hypot(dx, dz);
-    if (d > 17) return false;
+    if (d > 26) return false;
     const a = Math.abs(angleDiff(Math.atan2(dx, dz), this.yaw + this.headYaw));
     if (a > 0.85 && d > 2.2) return false;
     return this.world.los(this.pos.x, this.pos.z, px, pz);
@@ -503,9 +505,9 @@ export class Robot {
         if (!ctx.disguise && !this.guideArrived) { this.broken = true; this.setState('chase'); break; }
         if (!this.path && !this.guideArrived) this.goTo(this.guideCell, null);
         if (!this.guideArrived) {
-          if (dist > 7) { this.lookAt = { x: P.x, z: P.z }; break; } // 손님이 따라올 때까지 기다림
+          if (dist > 10) { this.lookAt = { x: P.x, z: P.z }; break; } // 손님이 따라올 때까지 기다림
           this.lookAt = null;
-          if (this.follow(dt, 2.3)) {
+          if (this.follow(dt, 2.8)) {
             const f = this.guideFace;
             this.steer(dt, f.x, f.z, 0.01);
             if (this.stateT > 0.3 && Math.abs(angleDiff(Math.atan2(f.x - this.pos.x, f.z - this.pos.z), this.yaw)) < 0.2) { this.guideArrived = true; ctx.onGuideArrive(this); this.stateT = 0; }
@@ -532,19 +534,19 @@ export class Robot {
           }
           this.goTo(best, forbid);
         }
-        this.follow(dt, 2.0);
+        this.follow(dt, 2.5);
         if (this.stateT > 15) this.setState('patrol');
         break;
       }
       case 'chase':
       case 'alert': {
-        const sp = (this.state === 'chase' ? 4.35 + deep * 0.6 : 3.7) * slow;
+        const sp = (this.state === 'chase' ? 5.4 + deep * 0.7 : 4.6) * slow;
         if (!hostile) { this.setState('patrol'); break; }
         if (ctx.repel && dist < 6) { this.setState('flee'); break; }
         if (this.sees) {
           this.lastSeen = { x: P.x, z: P.z };
           this.lostT = 0;
-          if (dist < 7) { this.steer(dt, P.x, P.z, sp); this.path = null; }
+          if (dist < 10) { this.steer(dt, P.x, P.z, sp); this.path = null; }
           else {
             if (!this.path || this.stateT % 0.6 < dt) { const c = cellAt(P.x, P.z); this.goTo(idx(c.cx, c.cz), forbid); }
             if (this.follow(dt, sp)) this.path = null;
@@ -571,7 +573,7 @@ export class Robot {
       case 'flee': {
         if (!ctx.repel || dist > 8) { this.setState('patrol'); break; }
         const ax = this.pos.x - P.x, az = this.pos.z - P.z, d = Math.hypot(ax, az) || 1;
-        this.steer(dt, this.pos.x + (ax / d) * 3, this.pos.z + (az / d) * 3, 2.6);
+        this.steer(dt, this.pos.x + (ax / d) * 3, this.pos.z + (az / d) * 3, 3.2);
         break;
       }
       case 'search': {
@@ -583,7 +585,7 @@ export class Robot {
           const list = near.length ? near : cells;
           this.goTo(list[Math.floor(Math.random() * list.length)], forbid);
         }
-        if (this.follow(dt, 2.3 * slow)) this.path = null;
+        if (this.follow(dt, 2.9 * slow)) this.path = null;
         if (hostile && !ctx.free && this.sees) this.setState('chase');
         if (this.searchT <= 0) this.setState('patrol');
         break;
@@ -601,7 +603,7 @@ export class Robot {
           if (ctx.confuse) pick = this.world.anyCell();
           if (!this.goTo(pick, forbid)) { this.wait = 1; break; }
         }
-        if (this.follow(dt, 1.45 * slow)) { this.path = null; this.wait = 1 + Math.random() * 2.5; }
+        if (this.follow(dt, 1.8 * slow)) { this.path = null; this.wait = 1 + Math.random() * 2.5; }
         break;
       }
     }
@@ -648,7 +650,7 @@ export class Robot {
     const col = this.pose === 'collect';
     this.twT = (this.twT ?? 2 + Math.random() * 4) - dt;
     if (this.twT <= 0) {
-      this.twT = (hunting || col ? 0.5 : 2.5) + Math.random() * (hunting || col ? 1.2 : 5);
+      this.twT = (hunting || col ? 1.4 : 3) + Math.random() * (hunting || col ? 2 : 5);
       this.tw = 0.14 + Math.random() * 0.1;
       this.twRoll = (Math.random() < 0.5 ? -1 : 1) * (0.25 + Math.random() * 0.3);
       this.twYaw = (Math.random() - 0.5) * 0.5;
@@ -656,7 +658,8 @@ export class Robot {
     if (this.tw > 0) this.tw -= dt;
     const twOn = this.tw > 0;
     this.rollCur = (this.rollCur || 0) + ((twOn ? this.twRoll : 0) - (this.rollCur || 0)) * Math.min(1, dt * 28);
-    m.head.rotation.set(this.headPitchCur, this.headYawCur + (twOn ? this.twYaw : 0), this.rollCur);
+    m.head.rotation.set(this.headPitchCur, this.headYawCur, 0);
+    m.skull.rotation.set(0, twOn ? this.twYaw : 0, this.rollCur);
     // 태엽, 톱니, 송곳니, 수술 팔
     this.animT = (this.animT || 0) + dt;
     const at = this.animT;
@@ -666,7 +669,7 @@ export class Robot {
     m.gears[1].rotation.z -= dt * spin * 1.55;
     m.gears[2].rotation.z -= dt * spin * 1.9;
     m.glow.scale.setScalar(0.85 + 0.25 * Math.abs(Math.sin(at * (hunting || col ? 9 : 2.5))));
-    const fo = col ? 0.55 + 0.1 * Math.sin(at * 20) : hunting ? 0.18 + 0.22 * Math.abs(Math.sin(at * 11)) : 0.05 + 0.04 * Math.sin(at * 1.7 + this.id);
+    const fo = col ? 0.55 + 0.1 * Math.sin(at * 20) : hunting ? 0.16 + 0.16 * Math.abs(Math.sin(at * 6)) : 0.05 + 0.04 * Math.sin(at * 1.7 + this.id);
     this.fang = (this.fang || 0) + (fo - (this.fang || 0)) * Math.min(1, dt * 12);
     m.fangL.rotation.z = this.fang; m.fangR.rotation.z = -this.fang;
     m.disc.rotation.x += dt * (col ? 45 : hunting ? 16 : 0.8);

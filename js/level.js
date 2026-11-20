@@ -1,11 +1,15 @@
 // 층 배치 만들기 + 3D로 그리기
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/BufferGeometryUtils.js';
-import { mulberry32, hashInt, shuffle } from './util.js';
+import { mulberry32, hashInt, shuffle, floorLabel, succ, pred } from './util.js';
 import * as TX from './textures.js';
 import { NOTES, TOP, BOTTOM, START_FLOOR } from './data.js';
 
-export const S = 4, W = 13, H = 13, WALL_H = 4.6, WALL_T = 0.24, DOOR_W = 1.8, DOOR_H = 3.1;
+export const S = 8, W = 13, H = 13, WALL_H = 8.4, WALL_T = 0.3, DOOR_W = 3.2, DOOR_H = 5.0;
+const K = S / 4; // 처음 설계(4m 칸) 대비 배율
+// 계단실: 동쪽 2x3칸. 북쪽 줄은 올라가는 계단, 남쪽 줄은 내려가는 계단, 가운데 줄은 층계참
+export const STAIR = { cx: 11, cz: 8, w: 2, h: 3 };
+export const RISE = 4.2;
 export const ELEV = { cx: 6, cz: 12 };
 export const DX = [0, 1, 0, -1], DZ = [-1, 0, 1, 0];
 export const idx = (cx, cz) => cz * W + cx;
@@ -42,7 +46,7 @@ export function generateLayout(floor, seed, opt = {}) {
     roomId: new Int16Array(W * H).fill(-1),
     voidCell: new Uint8Array(W * H),
     rooms: [], items: [], decor: [], boxes: [], segs: [],
-    hidden: null, hiddenOpen: false, exitDoor: null, start: null, arrive: null,
+    hidden: null, hiddenOpen: false, exitDoor: null, start: null, arrive: null, stairs: null,
   };
   if (floor === 0) { buildZero(L, opt); computeSegs(L); return L; }
 
@@ -55,6 +59,7 @@ export function generateLayout(floor, seed, opt = {}) {
   if (floor === 2) addRoom(L, 4, 3, 5, 4, 'mouth', true);
   if (floor === 3) addRoom(L, 4, 2, 5, 4, 'eyes', true);
   if (floor === 5) addRoom(L, 9, 2, 2, 2, 'guest', true);
+  addRoom(L, STAIR.cx, STAIR.cz, STAIR.w, STAIR.h, 'stair', true);
   let want = 5 + Math.floor(rnd() * 3), tries = 0;
   while (want > 0 && tries++ < 90) {
     const w = 2 + Math.floor(rnd() * 2), h = 2 + Math.floor(rnd() * 2);
@@ -77,6 +82,7 @@ export function generateLayout(floor, seed, opt = {}) {
   if (floor === 2) { door(6, 6, 2); door(6, 3, 0); }
   if (floor === 3) door(6, 5, 2);
   if (floor === 5) door(9, 3, 2);
+  door(STAIR.cx, STAIR.cz + 1, 3);
 
   // 크루스칼로 미로 + 방 연결
   const edges = [];
@@ -114,9 +120,18 @@ export function generateLayout(floor, seed, opt = {}) {
     }
   }
 
-  // 0층으로 가는 숨은 문 (1층 서쪽 벽, 지하 1층 동쪽 벽)
-  if (floor === 1) { L.hidden = { cx: 0, cz: 4, dir: 3 }; setEdge(L, 0, 4, 3, 3); }
-  if (floor === -1) { L.hidden = { cx: W - 1, cz: 4, dir: 1 }; setEdge(L, W - 1, 4, 1, 3); }
+  // 0층으로 가는 숨은 문: 1층과 지하 1층 계단실 층계참 안쪽 벽
+  if (floor === 1 || floor === -1) { L.hidden = { cx: W - 1, cz: STAIR.cz + 1, dir: 1 }; setEdge(L, W - 1, STAIR.cz + 1, 1, 3); }
+  // 계단: 맨 위층엔 올라가는 계단, 맨 아래층엔 내려가는 계단이 없음
+  {
+    const x0 = STAIR.cx * S + 3, x1 = W * S - 2.5;
+    const zN = STAIR.cz * S, zS = (STAIR.cz + STAIR.h) * S;
+    L.stairs = {
+      x0, x1,
+      up: floor < TOP ? { z0: zN + 0.45, z1: zN + 4.45, to: succ(floor) } : null,
+      down: floor > BOTTOM ? { z0: zS - 4.45, z1: zS - 0.45, to: pred(floor) } : null,
+    };
+  }
   if (opt.exitFloor === floor) {
     const cx = 2 + Math.floor(rnd() * 9);
     L.exitDoor = { cx, cz: 0, dir: 0 };
@@ -156,8 +171,9 @@ function buildZero(L, opt) {
   L.exitDoor = { cx: 6, cz: 4, dir: 0 };
   setEdge(L, 6, 4, 0, 4);
   L.arrive = { cx: 6, cz: 8, yaw: 0 };
-  L.decor.push({ type: 'statue', x: 21.2, z: 21.5, rot: Math.PI / 2 }, { type: 'statue', x: 30.8, z: 21.5, rot: -Math.PI / 2 });
-  L.boxes.push(box(21.2, 21.5, 0.9, 0.9, 0), box(30.8, 21.5, 0.9, 0.9, 0));
+  const sx1 = 5 * S + 1.6, sx2 = 8 * S - 1.6, sz = 5 * S + 3;
+  L.decor.push({ type: 'statue', x: sx1, z: sz, rot: Math.PI / 2 }, { type: 'statue', x: sx2, z: sz, rot: -Math.PI / 2 });
+  L.boxes.push(box(sx1, sz, 1.2, 1.2, 0), box(sx2, sz, 1.2, 1.2, 0));
 }
 
 function box(x, z, w, d, rot) {
@@ -212,7 +228,7 @@ function placeStuff(L, rnd, opt) {
   const used = new Set();
   const addItem = (o) => { o.id = `${L.floor}:${nid++}`; L.items.push(o); return o; };
   const roll = (pt, pk) => { const v = rnd(); return v < pt ? { tool: 1 } : v < pt + pk ? { kit: 1 } : {}; };
-  const wallSpot = (cx, cz, off = S / 2 - 0.5, spread = 1.4) => {
+  const wallSpot = (cx, cz, off = S / 2 - 0.5, spread = 1.4 * K) => {
     for (const d of shuffle([0, 1, 2, 3], rnd)) {
       if (getEdge(L, cx, cz, d) !== 1) continue;
       const key = `${cx},${cz},${d}`;
@@ -233,7 +249,8 @@ function placeStuff(L, rnd, opt) {
   }
   const cornerSpot = (c) => {
     const p = center(c % W, (c / W) | 0);
-    return { x: p.x + (rnd() < 0.5 ? -1 : 1) * (1.05 + rnd() * 0.3), z: p.z + (rnd() < 0.5 ? -1 : 1) * (1.05 + rnd() * 0.3), rot: rnd() * Math.PI * 2 };
+    const o = () => (rnd() < 0.5 ? -1 : 1) * (S / 2 - 1.0 - rnd() * 0.8);
+    return { x: p.x + o(), z: p.z + o(), rot: rnd() * Math.PI * 2 };
   };
 
   // 전시실: 진열장, 그림, 조각
@@ -245,7 +262,7 @@ function placeStuff(L, rnd, opt) {
     let cases = 1 + (rnd() < 0.6 ? 1 : 0);
     for (const [cx, cz] of cells) {
       if (cases <= 0) break;
-      const s = wallSpot(cx, cz, S / 2 - 0.75, 1.2);
+      const s = wallSpot(cx, cz, S / 2 - 0.75, 1.2 * K);
       if (!s) continue;
       addItem({ kind: 'case', ...s, content: roll(0.3, 0.15), art: Math.floor(rnd() * 4) });
       L.boxes.push(box(s.x, s.z, 0.85, 0.85, s.rot));
@@ -255,15 +272,34 @@ function placeStuff(L, rnd, opt) {
       for (let d = 0; d < 4; d++) {
         if (getEdge(L, cx, cz, d) !== 1 || rnd() > 0.55) continue;
         const c = center(cx, cz), off = S / 2 - WALL_T / 2 - 0.04;
-        const x = d === 1 ? c.x + off : d === 3 ? c.x - off : c.x;
-        const z = d === 0 ? c.z - off : d === 2 ? c.z + off : c.z;
-        L.decor.push({ type: 'painting', x, z, rot: ROT[d], seed: Math.floor(rnd() * 6) });
+        for (const a of [-S / 4, S / 4]) {
+          if (rnd() < 0.25) continue;
+          const x = d === 1 ? c.x + off : d === 3 ? c.x - off : c.x + a;
+          const z = d === 0 ? c.z - off : d === 2 ? c.z + off : c.z + a;
+          L.decor.push({ type: 'painting', x, z, rot: ROT[d], seed: Math.floor(rnd() * 6) });
+        }
       }
     }
     const mx = (r.x + r.w / 2) * S + (r.w % 2 ? 0.95 : 0), mz = (r.y + r.h / 2) * S + (r.h % 2 ? 0.95 : 0);
     L.decor.push({ type: 'sculpture', x: mx, z: mz, rot: rnd() * 6, seed: Math.floor(rnd() * 4) });
-    L.decor.push({ type: 'rug', x: (r.x + r.w / 2) * S, z: (r.y + r.h / 2) * S, w: r.w * S - 1.6, d: r.h * S - 1.6 });
-    L.boxes.push(box(mx, mz, 0.8, 0.8, 0));
+    L.decor.push({ type: 'rug', x: (r.x + r.w / 2) * S, z: (r.y + r.h / 2) * S, w: r.w * S - 3.2, d: r.h * S - 3.2 });
+    L.boxes.push(box(mx, mz, 1.3, 1.3, 0));
+    L.decor.push({ type: 'chandelier', x: (r.x + r.w / 2) * S, z: (r.y + r.h / 2) * S });
+    // 칸마다 받침대 위 전시물, 가끔 긴 의자
+    for (let cz = r.y; cz < r.y + r.h; cz++) for (let cx = r.x; cx < r.x + r.w; cx++) {
+      const c = center(cx, cz);
+      if (Math.hypot(c.x - mx, c.z - mz) < S * 0.6) continue;
+      const v = rnd();
+      if (v < 0.5) {
+        const x = c.x + (rnd() - 0.5) * 1.2, z = c.z + (rnd() - 0.5) * 1.2;
+        L.decor.push({ type: 'pedestal', x, z, rot: rnd() * 6, seed: Math.floor(rnd() * 4) });
+        L.boxes.push(box(x, z, 0.8, 0.8, 0));
+      } else if (v < 0.72) {
+        const rot = rnd() < 0.5 ? 0 : Math.PI / 2;
+        L.decor.push({ type: 'bench', x: c.x, z: c.z, rot });
+        L.boxes.push(box(c.x, c.z, 1.9, 0.6, rot));
+      }
+    }
   }
 
   // 복도 벽등
@@ -271,7 +307,7 @@ function placeStuff(L, rnd, opt) {
     const k = roomKind(L, cx, cz);
     if (k !== 'corridor' && k !== 'exhibit') continue;
     for (let d = 0; d < 4; d++) {
-      if (getEdge(L, cx, cz, d) !== 1 || rnd() > (k === 'corridor' ? 0.2 : 0.12)) continue;
+      if (getEdge(L, cx, cz, d) !== 1 || rnd() > (k === 'corridor' ? 0.32 : 0.16)) continue;
       const c = center(cx, cz), off = S / 2 - WALL_T / 2 - 0.02;
       const x = d === 1 ? c.x + off : d === 3 ? c.x - off : c.x;
       const z = d === 0 ? c.z - off : d === 2 ? c.z + off : c.z;
@@ -287,7 +323,7 @@ function placeStuff(L, rnd, opt) {
     if (made >= nCont) break;
     const cx = c % W, cz = (c / W) | 0;
     if (rnd() < 0.5) {
-      const s = wallSpot(cx, cz, S / 2 - 0.45, 1.6);
+      const s = wallSpot(cx, cz, S / 2 - 0.45, 1.6 * K);
       if (!s) continue;
       addItem({ kind: 'cabinet', ...s, content: roll(0.35, 0.15) });
       L.boxes.push(box(s.x, s.z, 1.15, 0.5, s.rot));
@@ -310,6 +346,10 @@ function placeStuff(L, rnd, opt) {
     for (const c of freeCells) if (dist[c] >= 2 && dist[c] <= 4) { best = c; if (rnd() < 0.3) break; }
     if (best == null) best = freeCells.find((c) => dist[c] >= 1) ?? idx(sc[0], sc[1]);
     addItem({ kind: 'bag', ...cornerSpot(best), content: { kit: 1, note: 'n1' }, starter: true });
+    // 빈 관람 지도: 시작 자리에서 5~9칸 떨어진 곳의 가방
+    const mc = freeCells.filter((c) => dist[c] >= 5 && dist[c] <= 9 && c !== best);
+    const mcell = mc.length ? mc[Math.floor(rnd() * mc.length)] : freeCells[Math.floor(rnd() * freeCells.length)];
+    addItem({ kind: 'bag', ...cornerSpot(mcell), content: { map: 1 } });
   }
 
   // 쪽지
@@ -323,23 +363,27 @@ function placeStuff(L, rnd, opt) {
   // 특별 공간
   if (L.floor === -1) {
     // 라운지: 탁자, 벽난로, 소파
-    addItem({ kind: 'craft', x: 12, z: 38, rot: 0 });
-    L.boxes.push(box(12, 38, 1.8, 1.1, 0));
-    addItem({ kind: 'fire', x: 4.45, z: 38, rot: Math.PI / 2 });
-    L.boxes.push(box(4.45, 38, 2.2, 0.9, Math.PI / 2));
-    addItem({ kind: 'note', x: 11.35, z: 37.75, y: 0.86, rot: 0.3, note: 'n2' });
-    addItem({ kind: 'note', x: 12.7, z: 38.25, y: 0.86, rot: -0.5, note: 'n8' });
-    L.decor.push({ type: 'sofa', x: 7.2, z: 34.6, rot: Math.PI / 2 + 0.4 }, { type: 'sofa', x: 7.2, z: 41.4, rot: Math.PI / 2 - 0.4 }, { type: 'sofa', x: 16.5, z: 38, rot: -Math.PI / 2 });
-    L.boxes.push(box(7.2, 34.6, 2, 0.9, Math.PI / 2), box(7.2, 41.4, 2, 0.9, Math.PI / 2), box(16.5, 38, 2, 0.9, -Math.PI / 2));
-    L.decor.push({ type: 'rug', x: 12, z: 38, w: 13, d: 9 });
+    const fx = 1 * S + 0.45 + WALL_T / 2, fz = 9.5 * S;
+    L.lounge = { fx, fz };
+    addItem({ kind: 'craft', x: fx + 7.55, z: fz, rot: 0 });
+    L.boxes.push(box(fx + 7.55, fz, 1.8, 1.1, 0));
+    addItem({ kind: 'fire', x: fx, z: fz, rot: Math.PI / 2 });
+    L.boxes.push(box(fx, fz, 2.2, 0.9, Math.PI / 2));
+    addItem({ kind: 'note', x: fx + 6.9, z: fz - 0.25, y: 0.86, rot: 0.3, note: 'n2' });
+    addItem({ kind: 'note', x: fx + 8.25, z: fz + 0.25, y: 0.86, rot: -0.5, note: 'n8' });
+    addItem({ kind: 'map', x: fx + 7.7, z: fz - 0.3, y: 0.86, rot: 0.15 });
+    L.decor.push({ type: 'sofa', x: fx + 2.75, z: fz - 3.4, rot: Math.PI / 2 + 0.4 }, { type: 'sofa', x: fx + 2.75, z: fz + 3.4, rot: Math.PI / 2 - 0.4 }, { type: 'sofa', x: fx + 12.05, z: fz, rot: -Math.PI / 2 });
+    L.boxes.push(box(fx + 2.75, fz - 3.4, 2, 0.9, Math.PI / 2), box(fx + 2.75, fz + 3.4, 2, 0.9, Math.PI / 2), box(fx + 12.05, fz, 2, 0.9, -Math.PI / 2));
+    L.decor.push({ type: 'rug', x: fx + 7.55, z: fz, w: 15, d: 11 });
+    L.decor.push({ type: 'chandelier', x: fx + 7.55, z: fz }, { type: 'chandelier', x: 4 * S, z: 8.8 * S });
   }
   if (L.floor === 3) {
-    addItem({ kind: 'case', x: 26, z: 15, rot: 0, content: { tool: 1, kit: 1 }, art: 3 });
-    L.boxes.push(box(26, 15, 0.85, 0.85, 0));
+    addItem({ kind: 'case', x: 6.5 * S, z: 3.75 * S, rot: 0, content: { tool: 1, kit: 1 }, art: 3 });
+    L.boxes.push(box(6.5 * S, 3.75 * S, 0.85, 0.85, 0));
   }
   if (L.floor === 5) {
-    addItem({ kind: 'bed', x: 40, z: 12, rot: Math.PI });
-    L.boxes.push(box(40, 12, 1.6, 2.2, Math.PI));
+    addItem({ kind: 'bed', x: 10 * S, z: 3 * S, rot: Math.PI });
+    L.boxes.push(box(10 * S, 3 * S, 1.6, 2.2, Math.PI));
   }
 }
 
@@ -373,7 +417,22 @@ export function computeSegs(L) {
     const s1 = a(-g, 0), s2 = a(-g, 6), s3 = a(g, 0), s4 = a(g, 6);
     segs.push({ x1: s1.x, z1: s1.z, x2: s2.x, z2: s2.z }, { x1: s3.x, z1: s3.z, x2: s4.x, z2: s4.z }, { x1: s2.x, z1: s2.z, x2: s4.x, z2: s4.z });
   }
+  if (L.stairs) {
+    const st = L.stairs;
+    if (st.up) segs.push({ x1: st.x0, z1: st.up.z1, x2: st.x1, z2: st.up.z1 }, { x1: st.x1 + 0.4, z1: st.up.z0, x2: st.x1 + 0.4, z2: st.up.z1 });
+    if (st.down) segs.push({ x1: st.x0, z1: st.down.z0, x2: st.x1, z2: st.down.z0 }, { x1: st.x1 + 0.4, z1: st.down.z0, x2: st.x1 + 0.4, z2: st.down.z1 });
+  }
   L.segs = segs;
+}
+
+// 계단 위에 서 있으면 발밑 높이 (올라가는 계단 +, 내려가는 계단 -)
+export function floorY(L, x, z) {
+  const st = L && L.stairs;
+  if (!st || x < st.x0) return 0;
+  const t = Math.min(1, (x - st.x0) / (st.x1 - st.x0));
+  if (st.up && z >= st.up.z0 && z <= st.up.z1) return t * RISE;
+  if (st.down && z >= st.down.z0 && z <= st.down.z1) return -t * RISE;
+  return 0;
 }
 
 // 숨은 문 위치: 문 가운데(ox,oz), 벽을 따라가는 방향(ax,az), 바깥으로 나가는 방향(nx,nz)
@@ -411,6 +470,7 @@ function mats(theme) {
     sculpt: new THREE.MeshPhongMaterial({ color: brass ? 0x8c6a2c : 0x4d6a5a, shininess: 90, specular: 0x887744 }),
     exitGlow: new THREE.MeshBasicMaterial({ color: 0xfff3dc }),
     stairDark: new THREE.MeshLambertMaterial({ color: 0x15110c }),
+    mapPaper: new THREE.MeshLambertMaterial({ map: TX.mapPaperTex(), side: THREE.DoubleSide }),
   };
   return MATS[theme];
 }
@@ -527,12 +587,19 @@ export function buildFloor(L, taken) {
   group.add(wallMesh);
 
   // 바닥, 천장
-  const fl = new THREE.PlaneGeometry(W * S, H * S);
-  scaleUV(fl, (W * S) / 2, (H * S) / 2);
-  const floorMesh = new THREE.Mesh(fl, M.floor);
-  floorMesh.rotation.x = -Math.PI / 2;
-  floorMesh.position.set((W * S) / 2, 0, (H * S) / 2);
-  group.add(floorMesh);
+  const st = L.stairs;
+  const rects = st && st.down
+    ? [[0, 0, W * S, st.down.z0], [0, st.down.z0, st.x0, st.down.z1], [st.x1 + 0.4, st.down.z0, W * S, st.down.z1], [0, st.down.z1, W * S, H * S]]
+    : [[0, 0, W * S, H * S]];
+  for (const [ax, az, bx, bz] of rects) {
+    const fl = new THREE.PlaneGeometry(bx - ax, bz - az);
+    const uv = fl.attributes.uv, pos = fl.attributes.position;
+    for (let i = 0; i < uv.count; i++) uv.setXY(i, (pos.getX(i) + (ax + bx) / 2) / 2, (-pos.getY(i) + (az + bz) / 2) / 2);
+    const fm = new THREE.Mesh(fl, M.floor);
+    fm.rotation.x = -Math.PI / 2;
+    fm.position.set((ax + bx) / 2, 0, (az + bz) / 2);
+    group.add(fm);
+  }
   const cl = new THREE.PlaneGeometry(W * S, H * S);
   scaleUV(cl, (W * S) / 4, (H * S) / 4);
   const ceilMesh = new THREE.Mesh(cl, M.ceil);
@@ -543,7 +610,7 @@ export function buildFloor(L, taken) {
   // 꾸밈
   for (const d of L.decor) {
     if (d.type === 'painting') {
-      const w = 1.25, h = 1.6, y = 2.45;
+      const w = 2.0, h = 2.6, y = 3.4;
       batch.add(M.paint[d.seed], G_PLANE, d, 0, y, 0.035, w, h, 1);
       batch.add(M.gold, G_BOX, d, 0, y + h / 2 + 0.06, 0.02, w + 0.24, 0.12, 0.08);
       batch.add(M.gold, G_BOX, d, 0, y - h / 2 - 0.06, 0.02, w + 0.24, 0.12, 0.08);
@@ -552,18 +619,39 @@ export function buildFloor(L, taken) {
       if (L.theme === 'bronze') batch.add(M.gold, G_BOX, d, 0.3, y - h / 2 - 0.42, 0.02, 0.4, 0.14, 0.04, 0, 0, 0.12);
       else batch.add(M.gold, G_BOX, d, 0, y - h / 2 - 0.4, 0.02, 0.36, 0.13, 0.04);
     } else if (d.type === 'sconce') {
-      batch.add(M.gold, G_BOX, d, 0, 2.7, 0.06, 0.12, 0.34, 0.06);
-      batch.add(M.gold, G_BOX, d, 0, 2.58, 0.2, 0.05, 0.05, 0.3);
-      batch.add(M.globe, G_SPH, d, 0, 2.78, 0.34, 0.2, 0.26, 0.2);
+      batch.add(M.gold, G_BOX, d, 0, 3.6, 0.06, 0.14, 0.44, 0.06);
+      batch.add(M.gold, G_BOX, d, 0, 3.45, 0.24, 0.06, 0.06, 0.38);
+      batch.add(M.globe, G_SPH, d, 0, 3.7, 0.42, 0.26, 0.34, 0.26);
       const c = Math.cos(d.rot), s = Math.sin(d.rot);
-      view.anchors.push({ x: d.x + 0.5 * s, y: 2.8, z: d.z + 0.5 * c, color: P.lamp, power: 1 });
-    } else if (d.type === 'sculpture') {
-      batch.add(M.stone, G_BOX, d, 0, 0.5, 0, 0.7, 1.0, 0.7);
-      batch.add(M.gold, G_BOX, d, 0, 1.02, 0, 0.78, 0.05, 0.78);
+      view.anchors.push({ x: d.x + 0.6 * s, y: 3.7, z: d.z + 0.6 * c, color: P.lamp, power: 1 });
+    } else if (d.type === 'sculpture' || d.type === 'pedestal') {
+      const big = d.type === 'sculpture';
+      const pw = big ? 1.2 : 0.7, ph = big ? 1.3 : 1.0, ks = big ? 2.4 : 1;
+      batch.add(M.stone, G_BOX, d, 0, ph / 2, 0, pw, ph, pw);
+      batch.add(M.gold, G_BOX, d, 0, ph + 0.02, 0, pw + 0.08, 0.05, pw + 0.08);
       const kinds = [new THREE.TorusKnotGeometry(0.22, 0.07, 60, 8), new THREE.IcosahedronGeometry(0.3, 0), new THREE.TorusGeometry(0.25, 0.06, 8, 24), new THREE.OctahedronGeometry(0.32, 0)];
       const g = kinds[d.seed % kinds.length];
-      batch.add(M.sculpt, g, d, 0, 1.45, 0, 1, 1.3, 1, 0.4, 0, 0.3);
+      batch.add(M.sculpt, g, d, 0, ph + 0.45 * ks, 0, ks, 1.3 * ks, ks, 0.4, 0, 0.3);
       kinds.forEach((k) => k.dispose());
+      if (big) for (let k = 0; k < 6; k++) { // 둘레 줄 기둥
+        const a = (k / 6) * Math.PI * 2;
+        batch.add(M.gold, G_CYL, d, Math.cos(a) * 1.6, 0.5, Math.sin(a) * 1.6, 0.06, 1.0, 0.06);
+        batch.add(M.gold, G_SPH, d, Math.cos(a) * 1.6, 1.02, Math.sin(a) * 1.6, 0.1, 0.1, 0.1);
+        const b = a + Math.PI / 6;
+        batch.add(M.velvet, G_CYL, d, Math.cos(b) * 1.39, 0.86, Math.sin(b) * 1.39, 0.03, 1.6, 0.03, 0, Math.PI / 2 - b, Math.PI / 2);
+      }
+    } else if (d.type === 'bench') {
+      batch.add(M.velvet, G_BOX, d, 0, 0.46, 0, 1.8, 0.14, 0.5);
+      batch.add(M.wood, G_BOX, d, 0, 0.36, 0, 1.84, 0.06, 0.54);
+      for (const [a, b] of [[-0.8, -0.2], [0.8, -0.2], [-0.8, 0.2], [0.8, 0.2]]) batch.add(M.gold, G_CYL, d, a, 0.17, b, 0.05, 0.34, 0.05);
+    } else if (d.type === 'chandelier') {
+      const cy = WALL_H - 1.9;
+      batch.add(M.gold, G_CYL, d, 0, (WALL_H + cy) / 2 + 0.4, 0, 0.05, WALL_H - cy - 0.8, 0.05);
+      batch.add(M.gold, new THREE.TorusGeometry(1.2, 0.05, 6, 28), d, 0, cy, 0, 1, 1, 1, Math.PI / 2);
+      batch.add(M.gold, new THREE.TorusGeometry(0.6, 0.04, 6, 20), d, 0, cy + 0.45, 0, 1, 1, 1, Math.PI / 2);
+      for (let k = 0; k < 12; k++) batch.add(M.globe, G_SPH, d, Math.cos(k * 0.5236) * 1.2, cy + 0.12, Math.sin(k * 0.5236) * 1.2, 0.12, 0.17, 0.12);
+      for (let k = 0; k < 6; k++) batch.add(M.globe, G_SPH, d, Math.cos(k * 1.047) * 0.6, cy + 0.55, Math.sin(k * 1.047) * 0.6, 0.1, 0.14, 0.1);
+      view.anchors.push({ x: d.x, y: cy - 0.3, z: d.z, color: P.lamp, power: 1.6 });
     } else if (d.type === 'rug') {
       batch.add(M.rug, G_PLANE, { x: d.x, z: d.z, rot: 0 }, 0, 0.012, 0, d.w, d.d, 1, -Math.PI / 2);
     } else if (d.type === 'sofa') {
@@ -610,6 +698,13 @@ export function buildFloor(L, taken) {
         group.add(o); view.itemMeshes.set(it.id, o);
         geos.forEach((g, i) => { if (i !== it.art % 4) g.dispose(); });
       }
+    } else if (it.kind === 'map') {
+      if (gone) continue;
+      const m = new THREE.Mesh(G_PLANE, M.mapPaper);
+      m.scale.set(0.46, 0.34, 1);
+      m.rotation.set(-Math.PI / 2, 0, it.rot);
+      m.position.set(it.x, (it.y || 0) + 0.014, it.z);
+      group.add(m); view.itemMeshes.set(it.id, m);
     } else if (it.kind === 'note') {
       if (gone) continue;
       const m = new THREE.Mesh(G_PLANE, M.paper);
@@ -651,6 +746,7 @@ export function buildFloor(L, taken) {
   }
 
   buildSpecials(L, view, batch, M, P);
+  buildStairs(L, view, batch, M);
   batch.flush(group);
   return view;
 }
@@ -687,22 +783,23 @@ function buildSpecials(L, view, batch, M, P) {
     // 바깥 안내판
     const pl = new THREE.Mesh(G_PLANE, new THREE.MeshLambertMaterial({ map: TX.plaqueTex(['관람객 라운지', '지하 1층'], 'lounge') }));
     pl.scale.set(0.8, 0.25, 1);
-    pl.position.set(ex + S - 0.6, 1.75, ez - WALL_T / 2 - 0.015);
+    pl.scale.set(1.2, 0.375, 1);
+    pl.position.set(mx + DOOR_W / 2 + 1.3, 2.0, ez - WALL_T / 2 - 0.015);
     pl.rotation.y = Math.PI;
     group.add(pl);
     // 층 표시
     const fl = new THREE.Mesh(G_PLANE, new THREE.MeshBasicMaterial({ map: TX.plaqueTex([L.floor > 0 ? `${L.floor}` : `B${-L.floor}`], 'f' + L.floor) }));
-    fl.scale.set(0.5, 0.16, 1);
-    fl.position.set(mx, DOOR_H + 0.42, ez - WALL_T / 2 - 0.015);
+    fl.scale.set(0.8, 0.26, 1);
+    fl.position.set(mx, DOOR_H + 0.55, ez - WALL_T / 2 - 0.015);
     fl.rotation.y = Math.PI;
     group.add(fl);
-    view.anchors.push({ x: mx, y: 3.6, z: ez + S / 2, color: 0xffd28a, power: 0.8, fixed: true });
+    view.anchors.push({ x: mx, y: 5.0, z: ez + S / 2, color: 0xffd28a, power: 1.0, fixed: true });
   }
 
   const rooms = (k) => L.rooms.filter((r) => r.kind === k);
   // 「감정의 힘」: 벽 가득한 액자 속 입
   for (const r of rooms('mouth')) {
-    const spots = hallWallSpots(L, r, 0.95, [1.3, 2.3, 3.3]);
+    const spots = hallWallSpots(L, r, 0.95, [1.3, 2.3, 3.3, 4.3, 5.3, 6.3, 7.2]);
     const frames = new THREE.InstancedMesh(G_BOX, M.gold, spots.length);
     const mouths = new THREE.InstancedMesh(G_PLANE, new THREE.MeshLambertMaterial({ map: TX.mouthTex() }), spots.length);
     const dummy = new THREE.Object3D();
@@ -730,7 +827,7 @@ function buildSpecials(L, view, batch, M, P) {
     // 바닥에서 꿈틀대는 것들 (여러 번 징수당한 관람객)
     const rnd = mulberry32(L.seed + 99);
     const bodies = [];
-    for (let k = 0; k < 11; k++) {
+    for (let k = 0; k < 22; k++) {
       const g = new THREE.Group();
       const b = new THREE.Mesh(new THREE.CapsuleGeometry(0.22, 0.9, 4, 10), M.pale);
       b.rotation.z = Math.PI / 2; b.position.y = 0.22; g.add(b);
@@ -746,8 +843,8 @@ function buildSpecials(L, view, batch, M, P) {
     view.anims.push((t) => bodies.forEach((o) => { o.g.children[0].scale.set(1 + 0.08 * Math.sin(t * 2 + o.ph), 1, 1); o.g.rotation.z = 0.05 * Math.sin(t * 1.3 + o.ph); }));
     signAbove(L, r, view, batch, M, 31);
     const hx = (r.x + r.w / 2) * S, hz = (r.y + r.h / 2) * S;
-    view.anchors.push({ x: hx, y: 4, z: hz, color: 0xc08a5a, power: 1.2, fixed: true });
-    for (const [ax, az] of [[-6, -4], [6, -4], [-6, 4], [6, 4]]) view.anchors.push({ x: hx + ax, y: 3.2, z: hz + az, color: 0xd07a5a, power: 0.9, fixed: true });
+    view.anchors.push({ x: hx, y: 6, z: hz, color: 0xc08a5a, power: 1.4, fixed: true });
+    for (const [ax, az] of [[-6, -4], [6, -4], [-6, 4], [6, 4]]) view.anchors.push({ x: hx + ax * K, y: 4.2, z: hz + az * K, color: 0xd07a5a, power: 1.0, fixed: true });
   }
 
   // 「빛나는 시선」: 세 벽을 덮은 눈
@@ -766,10 +863,10 @@ function buildSpecials(L, view, batch, M, P) {
       const s = 0.75 + rr() * 0.5, gap = 0.085 * s, jx = (rr() - 0.5) * 0.12, jy = (rr() - 0.5) * 0.12;
       pts.push([x + ax * (jx - gap), y + jy, z + az * (jx - gap), s], [x + ax * (jx + gap), y + jy, z + az * (jx + gap), s]);
     };
-    for (let y = 0.4; y < WALL_H - 0.2; y += 0.27) {
-      const off = (Math.round(y / 0.27) % 2) * 0.2;
-      for (let x = x0 + 0.25 + off; x < x1 - 0.2; x += 0.4) pair(x, y, z0 + 0.06, 1, 0);
-      for (let z = z0 + 0.25 + off; z < z1 - 0.2; z += 0.4) { pair(x0 + 0.06, y, z, 0, 1); pair(x1 - 0.06, y, z, 0, 1); }
+    for (let y = 0.4; y < 6.2; y += 0.32) {
+      const off = (Math.round(y / 0.32) % 2) * 0.25;
+      for (let x = x0 + 0.25 + off; x < x1 - 0.2; x += 0.5) pair(x, y, z0 + 0.06, 1, 0);
+      for (let z = z0 + 0.25 + off; z < z1 - 0.2; z += 0.5) { pair(x0 + 0.06, y, z, 0, 1); pair(x1 - 0.06, y, z, 0, 1); }
     }
     const eyeGeo = new THREE.PlaneGeometry(0.17, 0.17);
     const eyes = new THREE.InstancedMesh(eyeGeo, new THREE.MeshBasicMaterial({ map: TX.eyeDiscTex(), alphaTest: 0.5 }), pts.length);
@@ -779,7 +876,7 @@ function buildSpecials(L, view, batch, M, P) {
     view.eyes = { r, mesh: eyes };
     view.anims.push((t, dt, ctx) => {
       acc += dt;
-      if (acc < 0.07) return;
+      if (acc < 0.1) return;
       acc = 0;
       target.set(ctx.px, ctx.py, ctx.pz);
       pts.forEach((p, i) => {
@@ -793,7 +890,7 @@ function buildSpecials(L, view, batch, M, P) {
     });
     group.add(eyes);
     signAbove(L, r, view, batch, M, 47);
-    view.anchors.push({ x: (r.x + r.w / 2) * S, y: 3.5, z: (r.y + r.h / 2) * S, color: 0x8fa8ff, power: 0.7, fixed: true });
+    view.anchors.push({ x: (r.x + r.w / 2) * S, y: 5.5, z: (r.y + r.h / 2) * S, color: 0x8fa8ff, power: 1.0, fixed: true });
   }
 
   // 게스트룸 등불
@@ -802,9 +899,9 @@ function buildSpecials(L, view, batch, M, P) {
   }
   // 라운지: 천장등 + 소파 옆 스탠드
   for (const r of rooms('lounge')) {
-    view.anchors.push({ x: (r.x + r.w / 2) * S, y: 4.0, z: (r.y + r.h / 2) * S, color: 0xffcf90, power: 1.0, fixed: true });
+    const { fx, fz } = L.lounge;
     const shade = new THREE.MeshBasicMaterial({ color: 0xffd9a0 });
-    for (const [x, z] of [[5.6, 32.9], [5.6, 43.1], [18.2, 35.2], [18.2, 40.8]]) {
+    for (const [x, z] of [[fx + 1.15, fz - 5.1], [fx + 1.15, fz + 5.1], [fx + 13.75, fz - 2.8], [fx + 13.75, fz + 2.8]]) {
       const b = { x, z, rot: 0 };
       batch.add(M.gold, G_CYL, b, 0, 0.75, 0, 0.05, 1.5, 0.05);
       batch.add(M.gold, G_CYL, b, 0, 0.03, 0, 0.36, 0.06, 0.36);
@@ -814,11 +911,12 @@ function buildSpecials(L, view, batch, M, P) {
   }
   // 0층 현관
   if (L.floor === 0) {
-    view.anchors.push({ x: 26, y: 4.0, z: 22, color: 0xffe2b0, power: 1.4, fixed: true });
-    const ch = { x: 26, z: 22, rot: 0 };
-    batch.add(M.gold, G_CYL, ch, 0, 4.2, 0, 0.05, 0.8, 0.05);
-    batch.add(M.gold, new THREE.TorusGeometry(0.6, 0.04, 6, 24), ch, 0, 3.8, 0, 1, 1, 1, Math.PI / 2);
-    for (let k = 0; k < 8; k++) batch.add(M.globe, G_SPH, ch, Math.cos(k * 0.785) * 0.6, 3.9, Math.sin(k * 0.785) * 0.6, 0.1, 0.14, 0.1);
+    const chx = 6.5 * S, chz = 5.5 * S, cy = WALL_H - 1.9;
+    view.anchors.push({ x: chx, y: cy - 0.3, z: chz, color: 0xffe2b0, power: 1.8, fixed: true });
+    const ch = { x: chx, z: chz, rot: 0 };
+    batch.add(M.gold, G_CYL, ch, 0, (WALL_H + cy) / 2, 0, 0.05, WALL_H - cy, 0.05);
+    batch.add(M.gold, new THREE.TorusGeometry(1.2, 0.05, 6, 28), ch, 0, cy, 0, 1, 1, 1, Math.PI / 2);
+    for (let k = 0; k < 12; k++) batch.add(M.globe, G_SPH, ch, Math.cos(k * 0.5236) * 1.2, cy + 0.12, Math.sin(k * 0.5236) * 1.2, 0.12, 0.17, 0.12);
   }
 
   // 숨은 문 + 계단 통로
@@ -878,6 +976,63 @@ function buildSpecials(L, view, batch, M, P) {
   }
 }
 
+// 계단실: 올라가는 계단(북쪽), 내려가는 계단(남쪽), 층 표지
+function buildStairs(L, view, batch, M) {
+  const st = L.stairs;
+  if (!st) return;
+  const n = 20, run = (st.x1 - st.x0) / n, rise = RISE / n;
+  const wallX = W * S - WALL_T / 2;
+  const sign = (text, key, x, y, z, rot) => {
+    const m = new THREE.Mesh(G_PLANE, new THREE.MeshLambertMaterial({ map: TX.plaqueTex([text], key) }));
+    m.scale.set(1.5, 0.47, 1); m.position.set(x, y, z); m.rotation.y = rot; view.group.add(m);
+  };
+  const rail = (z, yAt, out) => { // 난간: 기둥 + 손잡이
+    for (let k = 0; k <= 10; k++) {
+      const x = st.x0 + (st.x1 - st.x0) * (k / 10), y = yAt(x);
+      batch.add(M.gold, G_CYL, { x, z, rot: 0 }, 0, y + 0.5, 0, 0.06, 1.0, 0.06);
+    }
+    const a = Math.atan2(yAt(st.x1) - yAt(st.x0), st.x1 - st.x0), len = Math.hypot(st.x1 - st.x0, yAt(st.x1) - yAt(st.x0));
+    batch.add(M.gold, G_BOX, { x: (st.x0 + st.x1) / 2, z, rot: 0 }, 0, (yAt(st.x0) + yAt(st.x1)) / 2 + 1.02, 0, len, 0.08, 0.1, 0, 0, a);
+    if (out) batch.add(M.wood, G_BOX, { x: (st.x0 + st.x1) / 2, z, rot: 0 }, 0, (yAt(st.x0) + yAt(st.x1)) / 2 - (out > 0 ? 0 : 0.2), 0, len, 0.3, 0.08, 0, 0, a);
+  };
+  if (st.up) {
+    const zc = (st.up.z0 + st.up.z1) / 2, wd = st.up.z1 - st.up.z0;
+    for (let k = 0; k < n; k++) {
+      const x = st.x0 + (k + 0.5) * run, top = (k + 1) * rise;
+      batch.add(M.woodLight, G_BOX, { x, z: zc, rot: 0 }, 0, top / 2, 0, run, top, wd);
+      batch.add(M.gold, G_BOX, { x: x - run / 2 + 0.03, z: zc, rot: 0 }, 0, top - 0.01, 0, 0.06, 0.03, wd);
+    }
+    batch.add(M.woodLight, G_BOX, { x: (st.x1 + wallX) / 2, z: zc, rot: 0 }, 0, RISE / 2, 0, wallX - st.x1, RISE, wd); // 층계참
+    batch.add(M.black, G_PLANE, { x: wallX - 0.01, z: zc, rot: -Math.PI / 2 }, 0, RISE + 1.8, 0, wd, 3.6, 1); // 위로 이어지는 어둠
+    rail(st.up.z1, (x) => Math.min(1, (x - st.x0) / (st.x1 - st.x0)) * RISE, 1);
+    sign(`▲ ${floorLabel(st.up.to)}`, 'up' + st.up.to, st.x0 + 1.2, 2.6, st.up.z0 - 0.44 + WALL_T / 2 + 0.02, 0);
+    view.anchors.push({ x: (st.x0 + st.x1) / 2, y: RISE + 1.6, z: zc, color: 0xffcf8a, power: 0.9, fixed: true });
+  }
+  if (st.down) {
+    const zc = (st.down.z0 + st.down.z1) / 2, wd = st.down.z1 - st.down.z0;
+    const bottom = -RISE - 0.6;
+    for (let k = 0; k < n; k++) {
+      const x = st.x0 + (k + 0.5) * run, top = -(k + 1) * rise;
+      batch.add(M.woodLight, G_BOX, { x, z: zc, rot: 0 }, 0, (top + bottom) / 2, 0, run, top - bottom, wd);
+      batch.add(M.gold, G_BOX, { x: x - run / 2 + 0.03, z: zc, rot: 0 }, 0, top - 0.01, 0, 0.06, 0.03, wd);
+    }
+    // 구덩이 벽 (바닥 아래)
+    const pit = (x, z, w, d) => batch.add(M.stairDark, G_BOX, { x, z, rot: 0 }, 0, bottom / 2, 0, w, -bottom, d);
+    pit((st.x0 + st.x1 + 0.4) / 2, st.down.z0 - 0.05, st.x1 + 0.4 - st.x0, 0.1);
+    pit((st.x0 + st.x1 + 0.4) / 2, st.down.z1 + 0.05, st.x1 + 0.4 - st.x0, 0.1);
+    pit(st.x0 - 0.05, zc, 0.1, wd);
+    batch.add(M.black, G_PLANE, { x: st.x1 + 0.39, z: zc, rot: -Math.PI / 2 }, 0, bottom / 2, 0, wd, -bottom, 1); // 아래로 이어지는 어둠
+    rail(st.down.z0, () => 0, 0);
+    sign(`▼ ${floorLabel(st.down.to)}`, 'dn' + st.down.to, st.x0 + 1.2, 2.6, st.down.z1 + 0.44 - WALL_T / 2 - 0.02, Math.PI);
+    view.anchors.push({ x: (st.x0 + st.x1) / 2, y: 1.2, z: zc, color: 0xffcf8a, power: 0.8, fixed: true });
+  }
+  // 층계참 등불, 계단실 입구 표지
+  view.anchors.push({ x: STAIR.cx * S + S, y: 5.5, z: (STAIR.cz + 1.5) * S, color: 0xffd9a0, power: 1.2, fixed: true });
+  const ex = STAIR.cx * S - WALL_T / 2 - 0.02, ez = (STAIR.cz + 1.5) * S;
+  const pl = new THREE.Mesh(G_PLANE, new THREE.MeshLambertMaterial({ map: TX.plaqueTex(['계단'], 'stairs') }));
+  pl.scale.set(1.6, 0.5, 1); pl.position.set(ex, DOOR_H + 0.8, ez); pl.rotation.y = -Math.PI / 2; view.group.add(pl);
+}
+
 // 큰 홀 안쪽 벽면을 따라 액자 자리 계산
 function hallWallSpots(L, r, step, ys) {
   const out = [];
@@ -913,8 +1068,8 @@ function signAbove(L, r, view, batch, M, seed) {
       const x = d === 1 ? c.x + off : d === 3 ? c.x - off : c.x;
       const z = d === 0 ? c.z - off : d === 2 ? c.z + off : c.z;
       const m = new THREE.Mesh(G_PLANE, new THREE.MeshLambertMaterial({ map: TX.glyphTex(seed) }));
-      m.scale.set(1.8, 0.45, 1);
-      m.position.set(x, DOOR_H + 0.75, z);
+      m.scale.set(2.6, 0.65, 1);
+      m.position.set(x, DOOR_H + 0.95, z);
       m.rotation.y = ROT[d] + Math.PI;
       view.group.add(m);
     }

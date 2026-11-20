@@ -1,10 +1,11 @@
 // 게임 진행: 시간, 층 이동, 징수, 양초, 질문, 0층
 import * as THREE from 'three';
-import { generateLayout, buildFloor, center, cellAt, idx, W, H, S, ELEV, roomKind, zonesFor, bfs, stairFrame, computeSegs, DOOR_H } from './level.js';
+import { generateLayout, buildFloor, center, cellAt, idx, W, H, S, ELEV, roomKind, zonesFor, bfs, stairFrame, computeSegs, DOOR_H, floorY, STAIR } from './level.js';
 import { Robot } from './robot.js';
 import { Player, collide, los } from './player.js';
 import { Sound } from './audio.js';
 import { Splatter } from './splat.js';
+import { reveal, drawMap } from './map.js';
 import { UI, ELEV_FLOORS } from './ui.js';
 import { PALETTE, glowTex } from './textures.js';
 import { CFG, CARD_MAP, NOTES, SLOTS, ENDINGS, TOP, BOTTOM, START_FLOOR } from './data.js';
@@ -24,17 +25,17 @@ renderer.setPixelRatio(pixelRatio);
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0f0b07);
 scene.fog = new THREE.FogExp2(0x0f0b07, 0.06);
-const camera = new THREE.PerspectiveCamera(72, 1, 0.05, 90);
+const camera = new THREE.PerspectiveCamera(72, 1, 0.05, 160);
 camera.rotation.order = 'YXZ';
 const hemi = new THREE.HemisphereLight(0x9a7a4a, 0x1a120a, 0.5);
 scene.add(hemi);
 const POOL = [];
-for (let i = 0; i < 7; i++) { const l = new THREE.PointLight(0xffb35a, 0, 13, 1.7); scene.add(l); POOL.push(l); }
+for (let i = 0; i < 9; i++) { const l = new THREE.PointLight(0xffb35a, 0, 24, 1.7); scene.add(l); POOL.push(l); }
 const candleLight = new THREE.PointLight(0xffc070, 0, 9, 1.6);
 scene.add(candleLight);
 const SPOTS = [];
 for (let i = 0; i < 2; i++) {
-  const s = new THREE.SpotLight(0xffcf60, 0, 22, 0.42, 0.5, 1.4);
+  const s = new THREE.SpotLight(0xffcf60, 0, 32, 0.42, 0.5, 1.4);
   scene.add(s, s.target);
   SPOTS.push(s);
 }
@@ -71,6 +72,7 @@ function freshState(mode) {
     lens: { t: 0, cd: 0 }, zoom: false, wasFree: true,
     zeroFrom: 1, screamCd: 0, eyeT: 0, timers: [],
     panelAnim: null, hadLock: false, panelLock: false,
+    hasMap: false, seen: new Map(), mapOpen: false, mapFloor: null, layouts: new Map(),
   };
 }
 
@@ -86,16 +88,16 @@ const world = {
   forbid: (c) => robotForbidden(c),
   sound(kind, r) {
     const d = Math.hypot(r.pos.x - player.x, r.pos.z - player.z);
-    if (d > 26) return;
-    if (kind === 'creak') sound.creak(r.pos.x, r.pos.z, r.state === 'chase');
-    else if (kind === 'tick') { const t = G.realT; if ((r._tickT || 0) < t) { r._tickT = t + 0.12; sound.tick(r.pos.x, r.pos.z); } }
+    if (d > 40) return;
+    if (kind === 'creak') sound.creakAt(r.emit, r.state === 'chase');
+    else if (kind === 'tick') { const t = G.realT; if ((r._tickT || 0) < t) { r._tickT = t + 0.06; sound.tap(r.emit); } }
   },
 };
 function robotForbidden(c) {
   const r = G.L.roomId[c];
   if (r < 0) return false;
   const k = G.L.rooms[r].kind;
-  return k === 'lounge' || k === 'elev';
+  return k === 'lounge' || k === 'elev' || k === 'stair';
 }
 const isFree = () => G.gameMin < CFG.freeMin;
 
@@ -107,8 +109,8 @@ function disposeGroup(g) {
 function loadFloor(f, arrival) {
   if (G.view) {
     scene.remove(G.view.group);
-    G.robots.forEach((r) => r.dispose());
-    if (attendant) attendant.dispose();
+    G.robots.forEach((r) => { sound.dropEmitter(r.emit); r.dispose(); });
+    if (attendant) { sound.dropEmitter(attendant.emit); attendant.dispose(); }
     disposeGroup(G.view.group);
   }
   attendant = null;
@@ -124,7 +126,7 @@ function loadFloor(f, arrival) {
   const P = PALETTE[G.L.theme];
   scene.fog.color.setHex(P.fog);
   scene.background.setHex(P.fog);
-  scene.fog.density = 0.055 + Math.min(0.03, G.L.depth * 0.0012);
+  scene.fog.density = 0.03 + Math.min(0.022, G.L.depth * 0.0009);
   hemi.color.setHex(P.hemiSky);
   hemi.groundColor.setHex(P.hemiGround);
   hemi.intensity = G.L.theme === 'brass' ? 0.55 : 0.42 - Math.min(0.15, G.L.depth * 0.006);
@@ -135,32 +137,49 @@ function loadFloor(f, arrival) {
     const p = stairFrame(G.L.hidden);
     player.x = p.ox - p.nx * 1.4; player.z = p.oz - p.nz * 1.4;
     player.yaw = Math.atan2(p.nx, p.nz);
+  } else if ((arrival === 'stairUp' || arrival === 'stairDown') && G.L.stairs) {
+    // 올라왔으면 이 층 내려가는 계단 꼭대기, 내려왔으면 올라가는 계단 밑에서 계단실 입구 쪽을 보고 섬
+    const st = G.L.stairs, fl = arrival === 'stairUp' ? st.down : st.up;
+    player.x = st.x0 - 1.3; player.z = fl ? (fl.z0 + fl.z1) / 2 : (STAIR.cz + 1.5) * S;
+    player.yaw = Math.PI / 2;
   } else a = G.L.arrive;
   if (a) {
     const c = center(a.cx, a.cz);
     player.x = c.x; player.z = c.z; player.yaw = a.yaw;
   }
   player.pitch = 0;
+  G.fy = 0;
   spawnRobots(idx(cellAt(player.x, player.z).cx, cellAt(player.x, player.z).cz));
   if (f !== 0) {
     attendant = new Robot(world, idx(ELEV.cx, ELEV.cz), -1, 99);
-    attendant.pos.set(ELEV.cx * S + 1.0, 0, ELEV.cz * S + 3.0);
+    attendant.pos.set(ELEV.cx * S + 2.0, 0, ELEV.cz * S + 6.0);
     attendant.yaw = Math.PI * 0.75;
     attendant.bow = 1;
     for (const L of attendant.model.legs) { attendant.homeOf(L, L.foot); L.from.copy(L.foot); L.to.copy(L.foot); }
     attendant.syncModel(0.016);
+    attendant.emit = sound.robotEmitter();
+  }
+  // 층에 깔리는 소리: 전시실 괘종시계 몇 개, 라운지 벽난로, 감정의 힘 합창 자리
+  sound.clearAmbient();
+  const crnd = mulberry32(hashInt(G.seed, f + 900));
+  for (const r of G.L.rooms) if (r.kind === 'exhibit' && crnd() < 0.5) sound.addClock(r.x * S + 1.2, r.y * S + 1.2);
+  if (G.L.lounge) sound.addFire(G.L.lounge.fx + 0.5, G.L.lounge.fz);
+  if (G.view.mouth) {
+    const r = G.view.mouth.r, cz = (r.y + r.h / 2) * S;
+    sound.setChoirSpots([[r.x * S + 3, 3, cz], [(r.x + r.w) * S - 3, 3, cz], [(r.x + r.w / 2) * S, 3.5, r.y * S + 3]]);
   }
   ui.floorFlash(f);
 }
 
 function spawnRobots(arrCell) {
   G.robots = [];
+  for (const l of [...POOL, ...SPOTS]) { l.userData = {}; l.intensity = 0; }
   G.zone = null; G.zoneCells = [];
   const L = G.L;
   G.allCells = [];
   for (let c = 0; c < W * H; c++) if (!L.voidCell[c] && !robotForbidden(c)) G.allCells.push(c);
   if (G.floor === 0) return;
-  const n = G.floor > 0 ? 2 : Math.min(5, 2 + Math.floor(-G.floor / 8));
+  const n = G.floor > 0 ? 3 : Math.min(6, 3 + Math.floor(-G.floor / 7));
   const rnd = mulberry32(hashInt(G.seed, G.floor + 300, G.visit++));
   const { dist } = bfs(L, arrCell);
   const cand = shuffle(G.allCells.filter((c) => dist[c] >= 4), rnd);
@@ -174,6 +193,7 @@ function spawnRobots(arrCell) {
   G.zone = zonesFor(L, seeds, robotForbidden);
   G.zoneCells = seeds.map((_, i) => G.allCells.filter((c) => G.zone[c] === i));
   seeds.forEach((c, i) => G.robots.push(new Robot(world, c, i, i)));
+  G.robots.forEach((r) => (r.emit = sound.robotEmitter()));
 }
 
 /* ── 시작 ── */
@@ -182,10 +202,11 @@ function writeSave(o) { try { localStorage.setItem('blind-mansion-v1', JSON.stri
 
 function startGame(mode) {
   sound.init();
+  sound.occlude = (x, z) => !!(G && G.L) && !los(G.L, player.x, player.z, x, z);
   if (G && G.view) {
     scene.remove(G.view.group);
-    G.robots.forEach((r) => r.dispose());
-    if (attendant) attendant.dispose();
+    G.robots.forEach((r) => { sound.dropEmitter(r.emit); r.dispose(); });
+    if (attendant) { sound.dropEmitter(attendant.emit); attendant.dispose(); }
     disposeGroup(G.view.group);
     attendant = null;
   }
@@ -248,6 +269,8 @@ player.bind((code, down, e) => {
   else if (code === 'KeyF') toggleCandle();
   else if (code === 'KeyQ') useLens();
   else if (code === 'KeyR') repair();
+  else if (code === 'KeyM') toggleMap();
+  else if (G.mapOpen && (code === 'BracketLeft' || code === 'BracketRight')) shiftMapFloor(code === 'BracketLeft' ? 1 : -1);
   else if (code === 'Escape' && !document.pointerLockElement) pauseGame();
   if (code === 'Space') e.preventDefault();
 });
@@ -550,7 +573,7 @@ function collectCamera(dt) {
   player.pitch += (clamp(Math.atan2(dy, Math.hypot(dx, dz)), -1.3, 1.3) - player.pitch) * kk;
   const sh = c.shake * c.shake;
   const j = () => (Math.random() - 0.5) * 2;
-  camera.position.set(player.x + j() * 0.02 * sh, player.eye - c.drop + j() * 0.02 * sh, player.z + j() * 0.02 * sh);
+  camera.position.set(player.x + j() * 0.02 * sh, player.eye + (G.fy || 0) - c.drop + j() * 0.02 * sh, player.z + j() * 0.02 * sh);
   camera.rotation.set(player.pitch + j() * 0.045 * sh, player.yaw + j() * 0.045 * sh, c.roll + j() * 0.03 * sh);
   glint.visible = t > 0.5 && t < 2.92;
   if (glint.visible) {
@@ -621,7 +644,7 @@ function violation(kind) {
   for (const r of G.robots) {
     if (!['patrol', 'search', 'alert'].includes(r.state)) continue;
     const d = Math.hypot(r.pos.x - player.x, r.pos.z - player.z);
-    const caught = kind === 'noise' ? d < 13 : (r.sees && d < 18);
+    const caught = kind === 'noise' ? d < 20 : (r.sees && d < 26);
     if (caught) {
       if (r.state !== 'alert') sound.screech(r.pos.x, r.pos.z);
       r.setState('alert');
@@ -659,7 +682,7 @@ function findTarget() {
   if (best) {
     const P = {
       bag: 'E  가방을 뒤진다', cabinet: 'E  서랍을 연다', case: 'E  진열장을 연다', note: 'E  쪽지를 읽는다',
-      craft: 'E  양초를 만든다', fire: G.rest ? 'E  일어난다' : 'E  벽난로 앞에 앉는다', bed: 'E  눕는다',
+      craft: 'E  양초를 만든다', fire: G.rest ? 'E  일어난다' : 'E  벽난로 앞에 앉는다', bed: 'E  눕는다', map: 'E  관람 지도를 집는다',
     }[best.kind];
     return { id: best.id, kind: best.kind, item: best, prompt: P };
   }
@@ -683,6 +706,10 @@ function takeContent(it) {
   const got = [];
   if (c.tool) { G.inv.tools++; got.push('정비 공구'); }
   if (c.kit) { G.inv.kits++; got.push('양초 키트'); }
+  if (c.map) {
+    if (G.hasMap) ui.caption('지도는 이미 있다', 1.6);
+    else { G.hasMap = true; got.push('빈 관람 지도'); later(2.4, () => ui.caption('걸어간 길이 지도에 저절로 그려진다 (M)', 3)); }
+  }
   if (got.length) { sound.pickup(); ui.caption(`${got.join(', ')}를 챙겼다`, 2.2); }
   else ui.caption(it.kind === 'case' ? '쓸 만한 건 없다' : '아무것도 없다', 1.6);
   if (c.note) later(got.length ? 0.6 : 0.1, () => showNote(c.note));
@@ -726,7 +753,12 @@ function doAction(t) {
       sound.clank(it.x, it.z);
       takeContent(it);
       violation('theft');
-      if (!isFree()) G.pendingNoise = { x: player.x, z: player.z, r: 9 };
+      if (!isFree()) G.pendingNoise = { x: player.x, z: player.z, r: 14 };
+      break;
+    case 'map':
+      taken.add(it.id);
+      G.view.itemMeshes.get(it.id)?.removeFromParent();
+      takeContent({ content: { map: 1 } });
       break;
     case 'note':
       taken.add(it.id);
@@ -759,6 +791,76 @@ function doAction(t) {
       endGame('escape');
       break;
   }
+}
+
+/* ── 관람 지도 ── */
+const miniCv = document.getElementById('miniMap'), bigCv = document.getElementById('mapBig');
+const miniG = miniCv.getContext('2d'), bigG = bigCv.getContext('2d');
+function seenOf(f) { if (!G.seen.has(f)) G.seen.set(f, new Uint8Array(W * H)); return G.seen.get(f); }
+function layoutOf(f) {
+  if (f === G.floor) return G.L;
+  if (!G.layouts.has(f)) G.layouts.set(f, generateLayout(f, G.seed, { exitFloor: G.exitFloor }));
+  const L = G.layouts.get(f);
+  L.hiddenOpen = G.hiddenOpened.has(f) || f === 0;
+  return L;
+}
+function toggleMap() {
+  if (!G.hasMap) { ui.caption('지도가 없다', 1.4); return; }
+  G.mapOpen = !G.mapOpen;
+  G.mapFloor = G.floor;
+  sound.paper();
+}
+function shiftMapFloor(dir) {
+  const floors = [...G.seen.keys()].filter((f) => G.seen.get(f).some((v) => v)).sort((a, b) => floorIndex(b) - floorIndex(a));
+  if (!floors.includes(G.floor)) floors.push(G.floor);
+  floors.sort((a, b) => floorIndex(b) - floorIndex(a));
+  const i = floors.indexOf(G.mapFloor);
+  G.mapFloor = floors[Math.max(0, Math.min(floors.length - 1, i + dir))];
+}
+addEventListener('wheel', (e) => { if (G && G.mapOpen) shiftMapFloor(e.deltaY > 0 ? -1 : 1); }, { passive: true });
+let mapT = 0;
+function updateMap(dt) {
+  const show = G.hasMap && ['play', 'collect', 'transition'].includes(G.state);
+  miniCv.hidden = !show;
+  bigCv.hidden = !(show && G.mapOpen);
+  if (!show) return;
+  mapT -= dt;
+  if (mapT <= 0 && G.state === 'play') { mapT = 0.15; reveal(G.L, seenOf(G.floor), player.x, player.z); }
+  // 구석 작은 지도: 손님이 가운데, 북쪽이 위
+  const g = miniG, w = miniCv.width, cell = 30;
+  g.clearRect(0, 0, w, w);
+  g.save();
+  g.beginPath(); g.arc(w / 2, w / 2, w / 2 - 1, 0, Math.PI * 2); g.clip();
+  g.fillStyle = 'rgba(20,14,8,0.82)'; g.fillRect(0, 0, w, w);
+  drawMap(g, G.L, seenOf(G.floor), { cell, ox: w / 2 - (player.x / S) * cell, oy: w / 2 - (player.z / S) * cell, player: { x: player.x, z: player.z, yaw: player.yaw }, labels: false });
+  g.restore();
+  // 큰 지도
+  if (!G.mapOpen) return;
+  if (bigCv.width !== innerWidth || bigCv.height !== innerHeight) { bigCv.width = innerWidth; bigCv.height = innerHeight; }
+  const B = bigG, vw = bigCv.width, vh = bigCv.height;
+  B.clearRect(0, 0, vw, vh);
+  B.fillStyle = 'rgba(0,0,0,0.55)'; B.fillRect(0, 0, vw, vh);
+  const size = Math.min(vw * 0.9, vh * 0.86), x0 = (vw - size) / 2, y0 = (vh - size) / 2 + 10;
+  B.fillStyle = '#cdb98e'; B.fillRect(x0 - 14, y0 - 46, size + 28, size + 64);
+  B.strokeStyle = '#6a4a1c'; B.lineWidth = 2; B.strokeRect(x0 - 8, y0 - 40, size + 16, size + 52);
+  const f = G.mapFloor ?? G.floor, L = layoutOf(f);
+  B.fillStyle = '#3b2611'; B.textAlign = 'left'; B.font = '800 22px "Nanum Myeongjo", serif';
+  B.fillText(`관람 지도  ${floorLabel(f)}`, x0, y0 - 14);
+  B.textAlign = 'right'; B.font = '13px "Nanum Myeongjo", serif';
+  B.fillText('M 닫기 / 휠이나 [ ] 다른 층', x0 + size, y0 - 14);
+  const bc = size / W;
+  drawMap(B, L, seenOf(f), { cell: bc, ox: x0, oy: y0, player: f === G.floor ? { x: player.x, z: player.z, yaw: player.yaw } : null, labels: true });
+}
+
+// 발밑: 계단은 나무, 라운지와 게스트룸과 전시실 카펫 위는 카펫, 나머지는 대리석
+function surfaceAt(kind) {
+  if (Math.abs(G.fy || 0) > 0.05) return 'wood';
+  if (kind === 'lounge' || kind === 'guest') return 'rug';
+  if (kind === 'exhibit') {
+    const r = G.L.rooms[G.L.roomId[idx(cellAt(player.x, player.z).cx, cellAt(player.x, player.z).cz)]];
+    if (r && player.x > r.x * S + 1.6 && player.x < (r.x + r.w) * S - 1.6 && player.z > r.y * S + 1.6 && player.z < (r.y + r.h) * S - 1.6) return 'rug';
+  }
+  return 'marble';
 }
 
 /* ── 층 이동 ── */
@@ -798,6 +900,11 @@ function updateTransition(dt) {
 
 function checkTriggers() {
   const L = G.L;
+  const st = L.stairs;
+  if (st && player.x > st.x1 - 0.9) {
+    if (st.up && player.z >= st.up.z0 && player.z <= st.up.z1) { startTransition(st.up.to, 'stairUp', 'stairs'); return; }
+    if (st.down && player.z >= st.down.z0 && player.z <= st.down.z1) { startTransition(st.down.to, 'stairDown', 'stairs'); return; }
+  }
   if (L.hidden && L.hiddenOpen) {
     const p = stairFrame(L.hidden);
     const out = (player.x - p.ox) * p.nx + (player.z - p.oz) * p.nz;
@@ -814,7 +921,10 @@ function endGame(kind) {
   if (document.pointerLockElement) document.exitPointerLock();
   if (kind === 'escape') writeSave({ cleared: true });
   const mm = Math.floor(G.gameMin);
-  sound.setHeart(0); sound.setChoir(0);
+  sound.setHeart(0); sound.setChoir(0); sound.setBreath(0);
+  G.robots.forEach((r) => sound.dropEmitter(r.emit));
+  if (attendant) sound.dropEmitter(attendant.emit);
+  sound.clearAmbient();
   ui.fade(0);
   ui.ending(ENDINGS[kind], [
     ['관람 시간', `${Math.floor(mm / 60)}시간 ${mm % 60}분`],
@@ -870,21 +980,24 @@ function update(dt) {
 
   // 플레이어
   const step = player.update(dt, G.L, { frozen: G.rest, ...playerMods() });
-  if (step) sound.step(step === 'run', step === 'crawl');
   const pc = cellAt(player.x, player.z);
   const kind = roomKind(G.L, pc.cx, pc.cz);
+  if (step) sound.step(step === 'run', step === 'crawl', surfaceAt(kind));
+  sound.setRoom(kind || 'corridor');
+  const tired = 1 - player.stamina / CFG.stamina;
+  sound.setBreath(player.running ? 0.35 + tired * 0.55 : tired > 0.35 ? tired * 0.8 : 0);
   const silent = lit && lit.fx === 'silent';
   G.noise = G.pendingNoise || null;
   G.pendingNoise = null;
   if (player.running && !silent) {
-    if (!free) G.noise = { x: player.x, z: player.z, r: 12 };
+    if (!free) G.noise = { x: player.x, z: player.z, r: 18 };
     if (free && (kind === 'exhibit' || kind === 'mouth' || kind === 'eyes')) violation('noise');
   }
   // 「감정의 힘」
   if (G.view.mouth) {
     const r = G.view.mouth.r;
     const d = Math.hypot(player.x - (r.x + r.w / 2) * S, player.z - (r.y + r.h / 2) * S);
-    sound.setChoir(kind === 'mouth' ? 0.3 : 0.3 * clamp(1 - (d - 8) / 24, 0, 1));
+    sound.setChoir(0.32);
     G.screamCd -= dt;
     if (G.view.mouth.scream > 0) G.view.mouth.scream -= dt;
     if (kind === 'mouth' && player.running && !silent && G.screamCd <= 0) {
@@ -918,9 +1031,11 @@ function update(dt) {
   let chase = 0;
   for (const r of G.robots) {
     r.update(dt, ctx);
-    if (r.state === 'chase' || r.state === 'alert') chase = Math.max(chase, 1 - Math.hypot(r.pos.x - player.x, r.pos.z - player.z) / 24);
+    if (r.state === 'chase' || r.state === 'alert') chase = Math.max(chase, 1 - Math.hypot(r.pos.x - player.x, r.pos.z - player.z) / 34);
   }
   sound.setHeart(clamp(chase, 0, 1));
+  for (const r of G.robots) sound.robotUpdate(r.emit, r.pos.x, 2.3, r.pos.z, r.speed, r.state === 'chase' || r.state === 'alert');
+  if (attendant) sound.robotUpdate(attendant.emit, attendant.pos.x, 1.4, attendant.pos.z, 0, false);
   if (G.state !== 'play') { visuals(dt); return; }
 
   // 렌즈
@@ -968,39 +1083,53 @@ function visuals(dt) {
   }
   // 카메라
   const bob = player.moving ? Math.sin(G.realT * (player.running ? 13 : 8)) * (player.running ? 0.05 : 0.025) : 0;
-  camera.position.set(player.x, player.eye + bob, player.z);
+  G.fy = (G.fy ?? 0) + (floorY(G.L, player.x, player.z) - (G.fy ?? 0)) * Math.min(1, dt * 14); // 계단 높이
+  camera.position.set(player.x, player.eye + bob + G.fy, player.z);
   camera.rotation.set(player.pitch, player.yaw, 0);
   const wantFov = G.zoom && lensAlive() ? 30 : 72;
   if (Math.abs(camera.fov - wantFov) > 0.2) { camera.fov += (wantFov - camera.fov) * Math.min(1, dt * 8); camera.updateProjectionMatrix(); }
-  sound.listener(player.x, player.eye, player.z, player.yaw);
+  sound.listener(player.x, player.eye + (G.fy || 0), player.z, player.yaw);
 
-  // 조명: 가까운 등만 켬
+  // 조명: 가까운 등만 켬. 맡은 등이 바뀌면 천천히 꺼졌다가 옮겨 가서 켜짐 (번쩍이지 않게)
   lightT -= dt;
   if (lightT <= 0) {
     lightT = 0.25;
-    const list = v.anchors.map((a) => ({ a, d: Math.hypot(a.x - player.x, a.z - player.z) * (a.fixed ? 0.6 : 1) })).sort((p, q) => p.d - q.d);
-    POOL.forEach((l, i) => {
-      const it = list[i];
-      if (!it || it.d > 26) { l.intensity = 0; return; }
-      l.position.set(it.a.x, it.a.y, it.a.z);
-      l.color.setHex(it.a.color);
-      l.userData.base = 7 * (it.a.power || 1) * (G.L.theme === 'bronze' ? 0.8 : 1);
-    });
-    const rs = G.robots.map((r) => ({ r, d: Math.hypot(r.pos.x - player.x, r.pos.z - player.z) })).sort((p, q) => p.d - q.d);
-    G.robots.forEach((r) => (r.light = null));
-    SPOTS.forEach((s, i) => {
-      const it = rs[i];
-      if (!it || it.d > 30) { s.intensity = 0; return; }
-      it.r.light = s;
-      s.intensity = 26;
-    });
+    const want = v.anchors.map((a) => ({ a, d: Math.hypot(a.x - player.x, a.z - player.z) * (a.fixed ? 0.6 : 1) }))
+      .filter((it) => it.d <= 44).sort((p, q) => p.d - q.d).slice(0, POOL.length).map((it) => it.a);
+    POOL.forEach((l) => { const u = l.userData; u.next = u.a && want.includes(u.a) ? u.a : undefined; });
+    const freeA = want.filter((a) => !POOL.some((l) => l.userData.next === a));
+    POOL.forEach((l) => { const u = l.userData; if (u.next === undefined) u.next = freeA.shift() || null; });
+    // 안내원 머리 등불: 가까운 둘. 이미 비추던 안내원은 3m 덤을 줘서 자주 갈아타지 않게
+    const held = new Set(SPOTS.map((s) => s.userData.r).filter(Boolean));
+    const wantR = G.robots.map((r) => ({ r, d: Math.hypot(r.pos.x - player.x, r.pos.z - player.z) - (held.has(r) ? 3 : 0) }))
+      .filter((it) => it.d < 40).sort((p, q) => p.d - q.d).slice(0, SPOTS.length).map((it) => it.r);
+    SPOTS.forEach((s) => { const u = s.userData; u.next = u.r && wantR.includes(u.r) ? u.r : undefined; });
+    const freeR = wantR.filter((r) => !SPOTS.some((s) => s.userData.next === r));
+    SPOTS.forEach((s) => { const u = s.userData; if (u.next === undefined) u.next = freeR.shift() || null; });
   }
-  POOL.forEach((l, i) => { if (l.userData.base) l.intensity = l.userData.base * (0.92 + 0.08 * Math.sin(G.realT * 7 + i * 2.1)); });
+  const bronze = G.L.theme === 'bronze' ? 0.8 : 1;
+  POOL.forEach((l, i) => {
+    const u = l.userData;
+    if (u.next !== u.a) {
+      u.k = Math.max(0, (u.k || 0) - dt * 5);
+      if (u.k <= 0) { u.a = u.next; if (u.a) { l.position.set(u.a.x, u.a.y, u.a.z); l.color.setHex(u.a.color); } }
+    } else u.k = u.a ? Math.min(1, (u.k || 0) + dt * 4) : 0;
+    l.intensity = u.a ? 18 * (u.a.power || 1) * bronze * u.k * (0.92 + 0.08 * Math.sin(G.realT * 7 + i * 2.1)) : 0;
+  });
+  SPOTS.forEach((s) => {
+    const u = s.userData;
+    if (u.next !== u.r) {
+      u.k = Math.max(0, (u.k || 0) - dt * 4);
+      if (u.k <= 0) { if (u.r && u.r.light === s) u.r.light = null; u.r = u.next; if (u.r) u.r.light = s; }
+    } else u.k = u.r ? Math.min(1, (u.k || 0) + dt * 3) : 0;
+    s.intensity = 32 * (u.k || 0);
+  });
   if (G.lit) {
     candleLight.intensity = 5 * (0.85 + 0.15 * Math.sin(G.realT * 17) * Math.sin(G.realT * 5.3));
-    candleLight.position.set(player.x - Math.sin(player.yaw) * 0.5, player.eye + 0.4, player.z - Math.cos(player.yaw) * 0.5);
+    candleLight.position.set(player.x - Math.sin(player.yaw) * 0.5, player.eye + (G.fy || 0) + 0.4, player.z - Math.cos(player.yaw) * 0.5);
   } else candleLight.intensity = 0;
   drawRipples();
+  updateMap(dt);
 }
 
 function drawRipples() {
@@ -1010,12 +1139,12 @@ function drawRipples() {
   const fx = -Math.sin(player.yaw), fz = -Math.cos(player.yaw), rx = Math.cos(player.yaw), rz = -Math.sin(player.yaw);
   for (const r of G.robots) {
     const dx = r.pos.x - player.x, dz = r.pos.z - player.z, d = Math.hypot(dx, dz);
-    if (d > 24) continue;
+    if (d > 36) continue;
     const th = Math.atan2(dx * rx + dz * rz, dx * fx + dz * fz) - Math.PI / 2;
-    const a = (1 - d / 24) * (r.speed > 0.2 ? 0.9 : 0.4);
+    const a = (1 - d / 36) * (r.speed > 0.2 ? 0.9 : 0.4);
     const pulse = 1 + 0.06 * Math.sin(G.realT * (r.speed > 3 ? 18 : 8));
     rctx.strokeStyle = `rgba(102,224,255,${a.toFixed(3)})`;
-    rctx.lineWidth = 3 + (1 - d / 24) * 4;
+    rctx.lineWidth = 3 + (1 - d / 36) * 4;
     rctx.beginPath();
     rctx.arc(cx, cy, R * pulse, th - 0.22, th + 0.22);
     rctx.stroke();
@@ -1028,7 +1157,7 @@ function hudTick(dt) {
   hudT = 0.1;
   ui.hud({
     gameMin: G.gameMin, floor: G.floor, memo: memoText(),
-    tools: G.inv.tools, kits: G.inv.kits,
+    tools: G.inv.tools, kits: G.inv.kits, map: G.hasMap,
     candles: G.candles.map((c) => ({ name: c.name, lit: c.lit, ready: G.gameMin >= c.hardenAt, left: c.hardenAt - G.gameMin, wax: clamp(c.wax / c.waxMax, 0, 1) })),
     parts: G.parts,
     prompt: G.state === 'play' && G.target ? G.target.prompt : '',
@@ -1078,4 +1207,5 @@ window.__bm = {
   act: () => G.target && doAction(G.target),
   catchMe: () => G.robots[0] && onCatch(G.robots[0]),
   toggleCandle,
+  giveMap() { G.hasMap = true; },
 };

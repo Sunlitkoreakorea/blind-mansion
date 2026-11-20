@@ -10,21 +10,22 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Nanum+Myeongjo:wght@400;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=2">
+<link rel="stylesheet" href="style.css?v=3">
 <!-- 다시 올릴 때는 아래 v=숫자를 전부 함께 올린다 (GitHub Pages 10분 캐시) -->
 <script type="importmap">
 { "imports": {
   "three": "./vendor/three.module.min.js",
   "three/addons/": "./vendor/addons/",
-  "./js/audio.js": "./js/audio.js?v=2",
-  "./js/data.js": "./js/data.js?v=2",
-  "./js/level.js": "./js/level.js?v=2",
-  "./js/player.js": "./js/player.js?v=2",
-  "./js/robot.js": "./js/robot.js?v=2",
-  "./js/splat.js": "./js/splat.js?v=2",
-  "./js/textures.js": "./js/textures.js?v=2",
-  "./js/ui.js": "./js/ui.js?v=2",
-  "./js/util.js": "./js/util.js?v=2"
+  "./js/audio.js": "./js/audio.js?v=3",
+  "./js/data.js": "./js/data.js?v=3",
+  "./js/level.js": "./js/level.js?v=3",
+  "./js/map.js": "./js/map.js?v=3",
+  "./js/player.js": "./js/player.js?v=3",
+  "./js/robot.js": "./js/robot.js?v=3",
+  "./js/splat.js": "./js/splat.js?v=3",
+  "./js/textures.js": "./js/textures.js?v=3",
+  "./js/ui.js": "./js/ui.js?v=3",
+  "./js/util.js": "./js/util.js?v=3"
 } }
 </script>
 </head>
@@ -49,7 +50,9 @@
   <div id="body"></div>
   <div id="candle"></div>
   <div id="floorFlash"></div>
+  <canvas id="miniMap" width="168" height="168" hidden></canvas>
 </div>
+<canvas id="mapBig" hidden></canvas>
 
 <div id="fade"></div>
 <div id="collect" hidden></div>
@@ -59,6 +62,6 @@
 <div id="title" hidden></div>
 <div id="nogl" hidden>이 브라우저에서는 3D 화면을 열 수 없어요. PC의 크롬, 엣지, 파이어폭스에서 열어 주세요.</div>
 
-<script type="module" src="js/main.js?v=2"></script>
+<script type="module" src="js/main.js?v=3"></script>
 </body>
 </html>
